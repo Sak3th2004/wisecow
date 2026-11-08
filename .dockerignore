@@ -1,0 +1,7 @@
+.git
+certs
+k8s
+scripts
+uploads
+README.md
+*.log
