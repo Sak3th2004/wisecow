@@ -1,0 +1,59 @@
+name: wisecow
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: login
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: build and push
+        run: |
+          image="ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          docker build -t "${image}:latest" -t "${image}:${GITHUB_SHA}" .
+          docker push "${image}:latest"
+          docker push "${image}:${GITHUB_SHA}"
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: deploy
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          if [ -z "${KUBE_CONFIG}" ]; then
+            echo "KUBE_CONFIG not set, skip deploy"
+            exit 0
+          fi
+          printf '%s\n' "${KUBE_CONFIG}" > kubeconfig
+          if ! grep -q '^apiVersion:' kubeconfig; then
+            base64 -d < kubeconfig > kubeconfig.out
+            mv kubeconfig.out kubeconfig
+          fi
+          curl -fsSL -o kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+          export KUBECONFIG="${PWD}/kubeconfig"
+          kubectl apply -f k8s/
+          image="ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          kubectl set image deployment/wisecow wisecow="${image}:${GITHUB_SHA}"
